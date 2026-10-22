@@ -16,14 +16,47 @@ Crucially, it executes at runtime with **Zero Server-Side Video Compute** via **
 
 ## System Architecture & Flows
 
+### Overview
+
+The match is processed once, offline: FFmpeg slices it into 6-second chunks, and AI tags every chunk into a vector index. At search time the API only ever returns a small text playlist; the browser then pulls the matching video chunks straight from the CDN.
+
+```mermaid
+flowchart LR
+    Video[("Match Video<br/>+ YouTube Captions")]
+    Chunks["FFmpeg<br/>6s chunks with<br/>forced keyframes"]
+    Tag["AI Tagging<br/>LLaVA vision +<br/>cleaned commentary"]
+    DB[("OpenSearch<br/>Vector Index")]
+    API["Search API<br/>Rewrite, retrieve,<br/>re-rank, pad"]
+    Player(["Browser Player<br/>hls.js"])
+    CDN[("CDN<br/>.ts chunks")]
+
+    Video --> Chunks --> Tag --> DB
+    Chunks -.->|"Stored once"| CDN
+    Player -->|"1. Search query"| API
+    API -->|"Vector search"| DB
+    API -->|"2. Text playlist only"| Player
+    CDN ==>|"3. Video chunks direct"| Player
+
+    classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef client fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    class Video,DB,CDN storage
+    class Tag,API ai
+    class Chunks process
+    class Player client
+```
+
 ### 1. The AI Context Engine (Offline Ingestion & Tagging)
 
-This flowchart outlines how the system extracts, sanitizes, and fuses multimodal intelligence to "understand" what happens inside each 6-second video chunk.
+This flowchart shows how the match is sliced into self-contained chunks, and how vision and commentary are cleaned, fused, and embedded so the system can "understand" what happens inside each 6-second chunk.
 
 ```mermaid
 flowchart TD
+    YT[("YouTube Match Video")]
+    Slice["FFmpeg Chunking<br/>- 6s .ts segments<br/>- Keyframe forced on every boundary"]
     CDN[("Mock CDN<br/>6s .ts video chunks")]
-    VTT["Raw YouTube Subtitles<br/>.vtt file"]
+    VTT[("Auto-generated Captions<br/>.vtt file")]
 
     subgraph Offline_AI["Offline Multi-Modal AI Indexing Pipeline"]
         LLaVA["LLaVA 7B Vision Model<br/>- Extracts frame at the 3s mark<br/>- Deafened: no commentary context<br/>- Outputs a strict physical action"]
@@ -34,53 +67,52 @@ flowchart TD
 
     VectorDB[("OpenSearch k-NN DB<br/>384-dimension vectors")]
 
-    CDN -->|"Video Frame"| LLaVA
-    VTT -->|"Sliding Text Window"| ASR
+    YT -->|"yt-dlp"| Slice
+    YT -->|"yt-dlp"| VTT
+    Slice --> CDN
+    CDN -->|"One frame per chunk"| LLaVA
+    VTT -->|"Captions inside the chunk window"| ASR
     LLaVA -->|"e.g. Batsman hitting ball"| Fusion
     ASR -->|"e.g. Rohit Sharma hits a boundary"| Fusion
     Fusion -->|"Combined Context String"| Embed
-    Embed -->|"Dense Vector"| VectorDB
+    Embed -->|"Dense Vector for every chunk"| VectorDB
 
     classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
     classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px
     classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px
-    class CDN,VectorDB storage
+    class YT,CDN,VTT,VectorDB storage
     class LLaVA,Embed,ASR ai
-    class Fusion process
+    class Slice,Fusion process
 ```
 
 ### 2. The Zero-Compute Delivery Engine (Runtime API & Assembly)
 
-This flowchart demonstrates the real-time search mechanics: how the API retrieves indexed chunks, applies precise reranking, and generates the text manifest that offloads video stitching to the client browser.
+This flowchart shows the real-time search path. The numbered arrows are the request order: the API only handles text (steps 1 to 3), and the video in step 4 goes straight from the CDN to the browser, never through the server.
 
 ```mermaid
 flowchart TD
-    UserQuery(["User Search Query<br/>e.g. Rohit Sharma six"])
-    VectorDB[("OpenSearch DB<br/>Indexed Chunk Metadata")]
+    UserQuery(["Browser: User Search Query<br/>e.g. Rohit Sharma six"])
+    HLSPlayer(["Browser: hls.js Player<br/>Client-side decoding and stitching"])
 
-    subgraph Online_API["Real-Time Serving API - Litestar"]
+    subgraph Server["API Server - Litestar - handles text only, never video"]
         Llama["Llama 3.2 - Local<br/>Query Rewrite"]
-        BiEnc["all-MiniLM-L6-v2<br/>Bi-Encoder Vectorization"]
-        CoarseSearch["Coarse Vector Search<br/>Retrieves Top 30 Matches"]
-        CrossEnc["MS-Marco Cross-Encoder<br/>Scores each query + chunk pair"]
-        Filter["Logit Threshold Filter<br/>Drops scores below -3.0"]
-        Padder["Temporal Padding Engine<br/>Adds one chunk of context each side"]
-        ManifestEngine["HLS Manifest Generator<br/>Inserts EXT-X-DISCONTINUITY tags"]
+        BiEnc["all-MiniLM-L6-v2<br/>Query Embedding"]
+        CrossEnc["MS-Marco Cross-Encoder<br/>Re-ranks top 30, drops scores below -3.0"]
+        Padder["Temporal Padding<br/>One chunk of context each side"]
+        ManifestEngine["HLS Manifest Generator<br/>Adds DISCONTINUITY tags between jumps"]
     end
 
-    HLSPlayer(["HLS.js Web Player<br/>Client-Side Hardware Decoder"])
+    VectorDB[("OpenSearch<br/>k-NN Index")]
     CDN[("Mock CDN<br/>.ts video chunks")]
 
-    UserQuery --> Llama
-    Llama -->|"Rewritten Query"| BiEnc
-    BiEnc -->|"Query Vector"| CoarseSearch
-    VectorDB -.->|"Fast k-NN Lookup"| CoarseSearch
-    CoarseSearch -->|"Top 30 Candidates"| CrossEnc
-    CrossEnc -->|"Relevance Scores"| Filter
-    Filter -->|"Top Verified Matches"| Padder
-    Padder -->|"Continuous Chunk List"| ManifestEngine
-    ManifestEngine -->|"Dynamic .m3u8 Playlist"| HLSPlayer
-    HLSPlayer -.->|"Direct Segment Fetch"| CDN
+    UserQuery -->|"1. GET /search"| Llama
+    Llama --> BiEnc
+    BiEnc -->|"2. k-NN search"| VectorDB
+    VectorDB -->|"Top 30 candidates"| CrossEnc
+    CrossEnc --> Padder
+    Padder --> ManifestEngine
+    ManifestEngine -->|"3. .m3u8 text playlist"| HLSPlayer
+    CDN ==>|"4. Video chunks fetched directly"| HLSPlayer
 
     classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
     classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px
@@ -88,7 +120,7 @@ flowchart TD
     classDef client fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
     class VectorDB,CDN storage
     class Llama,BiEnc,CrossEnc ai
-    class CoarseSearch,Filter,Padder,ManifestEngine process
+    class Padder,ManifestEngine process
     class UserQuery,HLSPlayer client
 ```
 
