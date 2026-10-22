@@ -8,7 +8,7 @@ After a match, networks release a generic highlight package reflecting what the 
 
 **SemanticStream** bridges that gap.
 
-A user submits a natural-language description of the moments they want to see (e.g., *"Rohit Sharma hitting a six"* or *"Kohli celebrating"*). The system identifies the relevant segments and serves a personalized highlight reel instantly.
+A user submits a natural-language description of the moments they want to see (e.g., *"Rohit Sharma hitting a six"* or *"Kohli celebrating"*). The system identifies the relevant segments and serves a personalized highlight reel in seconds.
 
 Crucially, it executes at runtime with **Zero Server-Side Video Compute** via **Client-Side HLS Assembly**: the backend never decodes, stitches, or re-encodes media.
 
@@ -323,7 +323,15 @@ uvicorn api.app:app --reload --port 8000
 
 Open `ui/index.html` in a browser, type a search (e.g. *"Kohli celebrating"*), and the personalized reel streams straight from the mock CDN.
 
+## Built With
+
+Python, FFmpeg, LLaVA and Llama 3.2 (via Ollama), sentence-transformers, OpenSearch, Litestar and hls.js.
+
+Code was written with the help of AI coding assistants; the idea, architecture and debugging decisions are my own.
+
+
 ---
+
 
 ## Project Structure
 
