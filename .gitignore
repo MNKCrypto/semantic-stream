@@ -1,0 +1,22 @@
+# Video source files and mock CDN chunks
+data/
+*.mp4
+*.ts
+*.vtt
+
+# Python environments and cache
+venv/
+__pycache__/
+*.py[cod]
+.env
+
+# OS temporary files
+.DS_Store
+Thumbs.db
+
+# Other video formats (e.g. demo screen recordings)
+*.mov
+*.webm
+*.mkv
+*.avi
+*.m3u8

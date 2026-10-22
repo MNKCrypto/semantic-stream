@@ -1,0 +1,7 @@
+# Offline ingestion pipeline (download, chunk, tag, vectorise)
+yt-dlp
+ffmpeg-python
+ollama
+pydantic
+sentence-transformers
+opensearch-py

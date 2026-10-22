@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SemanticStream - AI Video Highlights</title>
+    <!-- Import the HLS.js library to handle the .m3u8 stream -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #ffffff; display: flex; flex-direction: column; align-items: center; padding-top: 50px; }
+        .search-container { display: flex; gap: 10px; margin-bottom: 30px; width: 100%; max-width: 640px; }
+        input[type="text"] { flex-grow: 1; padding: 12px 20px; font-size: 16px; border-radius: 8px; border: none; outline: none; background-color: #2a2a2a; color: white; }
+        button { padding: 12px 24px; font-size: 16px; border-radius: 8px; border: none; background-color: #007bff; color: white; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background-color: #0056b3; }
+        video { width: 100%; max-width: 800px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); background-color: #000; }
+        .loading { display: none; margin-top: 10px; color: #888; }
+    </style>
+</head>
+<body>
+
+    <h1>SemanticStream</h1>
+    
+    <div class="search-container">
+        <input type="text" id="searchInput" placeholder="e.g. Suryakumar Yadav boundary catch" onkeypress="handleKeyPress(event)">
+        <button onclick="searchHighlights()">Generate</button>
+    </div>
+    
+    <div id="loadingText" class="loading">Searching OpenSearch and generating manifest...</div>
+
+    <video id="videoPlayer" controls></video>
+
+    <script>
+        let hls;          // Keep a global reference to destroy previous streams
+        let manifestBlobUrl; // Object URL of the last manifest, revoked on the next search
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') searchHighlights();
+        }
+
+        async function searchHighlights() {
+            const query = document.getElementById('searchInput').value;
+            if (!query) return;
+
+            const loadingText = document.getElementById('loadingText');
+            loadingText.innerText = 'Searching OpenSearch and generating manifest...';
+            loadingText.style.display = 'block';
+            
+            const manifestUrl = 'http://localhost:8000/search?q=' + encodeURIComponent(query);
+            const video = document.getElementById('videoPlayer');
+
+            if (hls) {
+                hls.destroy();
+            }
+
+            try {
+                // Fetch the manifest ONCE. Each request runs the whole AI pipeline (Llama rewrite,
+                // embeddings, Cross-Encoder), so we must not let the player request it again.
+                const response = await fetch(manifestUrl);
+                if (!response.ok) {
+                    loadingText.innerText = 'No highlights found for that search. Try another player!';
+                    return;
+                }
+                const manifestText = await response.text();
+
+                if (Hls.isSupported()) {
+                    // Hand the already-downloaded playlist to hls.js as a local blob URL.
+                    // Segment URLs inside it are absolute, so they still resolve to the CDN.
+                    if (manifestBlobUrl) URL.revokeObjectURL(manifestBlobUrl);
+                    manifestBlobUrl = URL.createObjectURL(
+                        new Blob([manifestText], { type: 'application/vnd.apple.mpegurl' })
+                    );
+                    hls = new Hls({ maxBufferLength: 10 });
+                    hls.loadSource(manifestBlobUrl);
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                        loadingText.style.display = 'none';
+                        video.play();
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    // Native HLS (Safari) cannot play blob manifests, so it re-requests the URL.
+                    video.src = manifestUrl;
+                    video.addEventListener('loadedmetadata', function() {
+                        loadingText.style.display = 'none';
+                        video.play();
+                    }, { once: true });
+                }
+            } catch (error) {
+                loadingText.innerText = 'Network error occurred.';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Runtime search API
+litestar
+uvicorn
+ollama
+sentence-transformers
+opensearch-py
