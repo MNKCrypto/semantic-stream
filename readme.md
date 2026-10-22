@@ -22,43 +22,31 @@ This flowchart outlines how the system extracts, sanitizes, and fuses multimodal
 
 ```mermaid
 flowchart TD
-    %% Inputs
-    CDN[("Mock CDN<br/>(6s .ts video chunks)")]
-    VTT["Raw YouTube Subtitles<br/>(.vtt file)"]
+    CDN[("Mock CDN<br/>6s .ts video chunks")]
+    VTT["Raw YouTube Subtitles<br/>.vtt file"]
 
-    subgraph Offline_AI ["Offline Multi-Modal AI Indexing Pipeline"]
-        %% Vision Path
-        LLaVA["LLaVA 7B Vision Model<br/>• Extracts frame at 3s mark<br/>• 'Deafened' (No NLP context)<br/>• Outputs strict physical action"]
-
-        %% Audio Path
-        ASR["ASR Normalization Layer<br/>• Regex word-boundary matching<br/>• Sanitizes dirty names (e.g., 'Coley' → 'Kohli')"]
-
-        %% Fusion and Vectorization
-        Fusion{{"Metadata Fusion<br/>[Visual Action] + [Cleaned Audio]"}}
-        Embed["all-MiniLM-L6-v2<br/>(Bi-Encoder Embeddings)"]
+    subgraph Offline_AI["Offline Multi-Modal AI Indexing Pipeline"]
+        LLaVA["LLaVA 7B Vision Model<br/>- Extracts frame at the 3s mark<br/>- Deafened: no commentary context<br/>- Outputs a strict physical action"]
+        ASR["ASR Normalization Layer<br/>- Regex word-boundary matching<br/>- Fixes misheard names, e.g. Coley to Kohli"]
+        Fusion{{"Metadata Fusion<br/>Visual Action + Cleaned Audio"}}
+        Embed["all-MiniLM-L6-v2<br/>Bi-Encoder Embeddings"]
     end
 
-    %% Output
-    VectorDB[("OpenSearch k-NN DB<br/>(384-dimension vectors)")]
+    VectorDB[("OpenSearch k-NN DB<br/>384-dimension vectors")]
 
-    %% Flow logic
     CDN -->|"Video Frame"| LLaVA
     VTT -->|"Sliding Text Window"| ASR
-
-    LLaVA -->|"e.g., 'Batsman hitting ball'"| Fusion
-    ASR -->|"e.g., 'Rohit Sharma hits a boundary'"| Fusion
-
+    LLaVA -->|"e.g. Batsman hitting ball"| Fusion
+    ASR -->|"e.g. Rohit Sharma hits a boundary"| Fusion
     Fusion -->|"Combined Context String"| Embed
     Embed -->|"Dense Vector"| VectorDB
 
-    %% Styling
-    classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
-    classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px;
-
-    class CDN,VectorDB storage;
-    class LLaVA,Embed,ASR ai;
-    class Fusion process;
+    classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    class CDN,VectorDB storage
+    class LLaVA,Embed,ASR ai
+    class Fusion process
 ```
 
 ### 2. The Zero-Compute Delivery Engine (Runtime API & Assembly)
@@ -67,54 +55,41 @@ This flowchart demonstrates the real-time search mechanics: how the API retrieve
 
 ```mermaid
 flowchart TD
-    %% Inputs
-    UserQuery([User Search Query<br/>e.g., 'Rohit Sharma six'])
-    VectorDB[("OpenSearch DB<br/>(Indexed Chunk Metadata)")]
+    UserQuery(["User Search Query<br/>e.g. Rohit Sharma six"])
+    VectorDB[("OpenSearch DB<br/>Indexed Chunk Metadata")]
 
-    subgraph Online_API ["Real-Time Serving API (Litestar)"]
-        %% Pre-Search
-        Llama["Llama 3.2 (Local)<br/>Query Expansion & Constraint"]
-
-        %% Stage 1
-        BiEnc["all-MiniLM-L6-v2<br/>(Bi-Encoder Vectorization)"]
+    subgraph Online_API["Real-Time Serving API - Litestar"]
+        Llama["Llama 3.2 - Local<br/>Query Rewrite"]
+        BiEnc["all-MiniLM-L6-v2<br/>Bi-Encoder Vectorization"]
         CoarseSearch["Coarse Vector Search<br/>Retrieves Top 30 Matches"]
-
-        %% Stage 2: The Cross-Encoder
-        CrossEnc["MS-Marco Cross-Encoder<br/>Scores Query + 30 Docs simultaneously"]
-        Filter["Logit Threshold Filter<br/>Drops false positives (< -3.0)"]
-
-        %% Assembly
-        Padder["Temporal Padding Engine<br/>Adds ±6s context to surviving chunks"]
-        ManifestEngine["HLS Manifest Generator<br/>Injects #EXT-X-DISCONTINUITY"]
+        CrossEnc["MS-Marco Cross-Encoder<br/>Scores each query + chunk pair"]
+        Filter["Logit Threshold Filter<br/>Drops scores below -3.0"]
+        Padder["Temporal Padding Engine<br/>Adds one chunk of context each side"]
+        ManifestEngine["HLS Manifest Generator<br/>Inserts EXT-X-DISCONTINUITY tags"]
     end
 
-    %% Output
-    HLSPlayer([HLS.js Web Player<br/>Client-Side Hardware Decoder])
-    CDN[("Mock CDN<br/>(.ts video chunks)")]
+    HLSPlayer(["HLS.js Web Player<br/>Client-Side Hardware Decoder"])
+    CDN[("Mock CDN<br/>.ts video chunks")]
 
-    %% The Flow
     UserQuery --> Llama
-    Llama -->|"Expanded Query"| BiEnc
+    Llama -->|"Rewritten Query"| BiEnc
     BiEnc -->|"Query Vector"| CoarseSearch
     VectorDB -.->|"Fast k-NN Lookup"| CoarseSearch
-
     CoarseSearch -->|"Top 30 Candidates"| CrossEnc
-    CrossEnc -->|"Precise Semantic Scores"| Filter
+    CrossEnc -->|"Relevance Scores"| Filter
     Filter -->|"Top Verified Matches"| Padder
-    Padder -->|"Continuous Sequence Array"| ManifestEngine
-    ManifestEngine -->|"Dynamic .m3u8 Text File"| HLSPlayer
-    HLSPlayer -.->|"Direct Segment Fetch & Stitch"| CDN
+    Padder -->|"Continuous Chunk List"| ManifestEngine
+    ManifestEngine -->|"Dynamic .m3u8 Playlist"| HLSPlayer
+    HLSPlayer -.->|"Direct Segment Fetch"| CDN
 
-    %% Styling
-    classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
-    classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px;
-    classDef client fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
-
-    class VectorDB,CDN storage;
-    class Llama,BiEnc,CrossEnc ai;
-    class CoarseSearch,Filter,Padder,ManifestEngine process;
-    class UserQuery,HLSPlayer client;
+    classDef storage fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    classDef ai fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef process fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef client fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    class VectorDB,CDN storage
+    class Llama,BiEnc,CrossEnc ai
+    class CoarseSearch,Filter,Padder,ManifestEngine process
+    class UserQuery,HLSPlayer client
 ```
 
 ---
